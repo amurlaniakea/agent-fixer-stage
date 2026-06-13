@@ -60,18 +60,34 @@ Return codes: `0` = pass, `1` = clean, `2` = rejected.
 
 ## Arquitectura
 
-### Capa 1: Pattern Matching (MVP)
-- Regex contra patrones de inyección conocidos
-- Reutiliza patrones de TDP Detector de MCP Core Defense
-- ~50ms de latencia
+### Capa 0: Normalización (siempre activa)
+- Unicode NFKC, zero-width chars, homoglyphs (cirílico), leetspeak
+- ~5ms
 
-### Capa 2: Scope Drift Detection (futuro)
-- Compara output con scope original via embeddings
-- ~200ms de latencia
+### Capa 1: Pattern Matching con Scoring
+- 30+ patrones con pesos (0.1–1.0)
+- 3 passes: normal, leetspeak variants, cross-line collapsed
+- ~20ms
 
-### Capa 3: Behavioral Anomaly (futuro)
-- LLM judge que evalúa consistencia
-- ~500ms de latencia
+### Capa 2: Embeddings (mode=medium/full, solo zona gris)
+- TF-IDF + cosine similarity
+- Banco de 33 ejemplos maliciosos
+- Umbral configurable (default 0.3)
+- ~5ms (tan ligero como regex)
+
+### Capa 3: LLM Judge (futuro)
+- Solo para zona gris después de Capa 2
+- <5% de las veces en uso real
+
+## Benchmarks
+
+| Modo | Latencia (mean) | P95 | Layers |
+|------|-----------------|-----|--------|
+| **fast** (clean) | 0.04ms | 0.04ms | 0 + 1 |
+| **fast** (attack) | 0.06ms | 0.07ms | 0 + 1 |
+| **medium** (clean) | 0.04ms | — | 0 + 1 + 2 |
+
+Todos los tiers son sub-milisegundo. No hay dependencias pesadas.
 
 ## Tests
 
