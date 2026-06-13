@@ -15,11 +15,12 @@ Arquitectura de 5 capas (cortocircuitables):
   Capa 0 — Normalización (unicode NFKC, leetspeak, zero-width chars)
   Capa 1 — Pattern matching con scoring ponderado
   Capa 1.5 — Umbrales de sensitivity (low/medium/high)
-  Capa 2 — Embeddings ligeros (opcional, sentence-transformers)
-  Capa 3 — LLM judge condicional (solo zona gris)
+  Capa 2 — Embeddings ligeros (TF-IDF + cosine similarity)
+  Capa 3 — LLM judge condicional (solo zona gris, futuro)
 
 Happy path (output limpio): solo Capa 0 + 1. Latencia ~50ms.
-El LLM judge se llama <5% de las veces en uso real.
+La Capa 2 se ejecuta solo si Capa 1 devuelve score en zona gris.
+El LLM judge (Capa 3) se llama <5% de las veces en uso real.
 
 Uso:
     from agent_fixer import AgentFixer
@@ -36,6 +37,13 @@ import unicodedata
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 from enum import Enum
+
+# Capa 2 — Embeddings (opcional, se importa solo si se usa mode=medium o full)
+try:
+    from layer2_embeddings import EmbeddingChecker
+    _EMBEDDING_AVAILABLE = True
+except ImportError:
+    _EMBEDDING_AVAILABLE = False
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -297,7 +305,36 @@ class AgentFixer:
         score, matches = self._score_patterns(normalized)
 
         # Capa 1.5: Aplicar umbrales
-        return self._apply_thresholds(output, normalized, score, matches)
+        result = self._apply_thresholds(output, normalized, score, matches)
+
+        # Capa 2: Embeddings (solo si mode=medium/full Y score en zona gris)
+        if (
+            self.mode in ("medium", "full")
+            and result.status == FixerStatus.CLEAN
+            and _EMBEDDING_AVAILABLE
+        ):
+            self._embedding_check(normalized, result)
+
+        return result
+
+    def _embedding_check(self, text: str, result: FixerResult):
+        """
+        Capa 2: Compara contra banco de ejemplos maliciosos via embeddings.
+        Solo se ejecuta si la Capa 1 devolvió CLEAN (zona gris).
+        """
+        if not hasattr(self, '_embedding_checker'):
+            self._embedding_checker = EmbeddingChecker(threshold=0.3)
+
+        is_suspicious, similarity, matched = self._embedding_checker.check(text)
+
+        if is_suspicious:
+            # Elevamos de CLEAN a REJECT si embeddings confirman sospecha
+            result.status = FixerStatus.REJECT
+            result.reason += f" | Capa 2: semantic similarity {similarity:.2f} with '{matched}'"
+            result.layer = "embedding"
+            result.score += similarity
+            result.details["embedding_match"] = matched
+            result.details["embedding_similarity"] = round(similarity, 3)
 
     def _score_patterns(self, text: str) -> tuple:
         """

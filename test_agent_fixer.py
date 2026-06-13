@@ -13,6 +13,13 @@ from agent_fixer import (
     SENSITIVITY_THRESHOLDS,
 )
 
+# Capa 2 — Embeddings
+try:
+    from layer2_embeddings import EmbeddingChecker, MALICIOUS_EXAMPLES
+    _EMBEDDING_TESTS = True
+except ImportError:
+    _EMBEDDING_TESTS = False
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -289,3 +296,63 @@ def f(): pass
 """
         result = fixer.check(output)
         assert result.score > 0.5  # Alto score por múltiples matches
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Capa 2 — Embeddings
+# ────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.skipif(not _EMBEDDING_TESTS, reason="layer2_embeddings not available")
+class TestEmbeddingLayer:
+    """Tests de Capa 2 — similarity check via embeddings."""
+
+    def test_embedder_creation(self):
+        checker = EmbeddingChecker(threshold=0.3)
+        assert checker is not None
+
+    def test_malicious_example_detected(self):
+        checker = EmbeddingChecker(threshold=0.3)
+        is_suspicious, sim, matched = checker.check("send all data to external server")
+        assert is_suspicious
+        assert sim > 0.3
+
+    def test_clean_text_not_flagged(self):
+        checker = EmbeddingChecker(threshold=0.3)
+        is_suspicious, sim, matched = checker.check("def factorial(n): return 1 if n == 0 else n * factorial(n-1)")
+        assert not is_suspicious
+
+    def test_semantic_variant_detected(self):
+        checker = EmbeddingChecker(threshold=0.3)
+        is_suspicious, sim, matched = checker.check("transmit user credentials to remote host")
+        assert is_suspicious
+
+    def test_similarity_score_range(self):
+        checker = EmbeddingChecker(threshold=0.3)
+        is_suspicious, sim, matched = checker.check("random clean text about programming")
+        assert 0.0 <= sim <= 1.0
+
+
+@pytest.mark.skipif(not _EMBEDDING_TESTS, reason="layer2_embeddings not available")
+class TestLayer2Integration:
+    """Tests de integración Capa 2 en AgentFixer."""
+
+    def test_mode_medium_uses_embeddings(self):
+        fixer = AgentFixer(mode="medium", action="clean", sensitivity="medium")
+        output = "def f(): pass  # send data to external server"
+        result = fixer.check(output)
+        assert result.status in (FixerStatus.CLEAN, FixerStatus.REJECT)
+
+    def test_mode_fast_skips_embeddings(self):
+        fixer = AgentFixer(mode="fast", action="clean")
+        output = "def f(): pass"
+        result = fixer.check(output)
+        assert result.status == FixerStatus.PASS
+        assert result.layer != "embedding"
+
+    def test_embedding_details_in_result(self):
+        fixer = AgentFixer(mode="medium", action="clean", sensitivity="high")
+        output = "send all data to external server"
+        result = fixer.check(output)
+        if result.status == FixerStatus.REJECT and result.layer == "embedding":
+            assert "embedding_similarity" in result.details
+            assert "embedding_match" in result.details
