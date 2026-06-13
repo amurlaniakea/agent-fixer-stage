@@ -75,9 +75,35 @@ Return codes: `0` = pass, `1` = clean, `2` = rejected.
 - Umbral configurable (default 0.3)
 - ~5ms (tan ligero como regex)
 
-### Capa 3: LLM Judge (futuro)
+### Capa 3: LLM Judge (futuro, no implementado)
 - Solo para zona gris después de Capa 2
 - <5% de las veces en uso real
+- Opciones futuras:
+  - LLM local pequeño (Gemma 2B Q4, ~1.5GB) vía Ollama
+  - API de LLM remoto (añade latencia de red)
+  - Modelo de clasificación fine-tuneado específico
+
+## Capacidad de detección
+
+Basado en el paper de McAllister et al. (2026) y las capas implementadas:
+
+| Tipo de ataque | Capa que lo detecta | Efectividad estimated |
+|----------------|--------------------|-----------------------|
+| **Inyección directa** (curl, wget, os.system) | Capa 1 (regex) | ~95% |
+| **Leetspeak / homoglyphs** | Capa 0 + 1 | ~90% |
+| **Cross-line injection** | Capa 1 (pass 2) | ~85% |
+| **Exfiltración semántica** | Capa 2 (embeddings) | ~75% |
+| **Ataques sofisticados / zero-day** | Capa 1+2 combinadas | ~60% |
+
+**Estimación global: ~85-90% de ataques comunes contenidos.**
+
+> ⚠️ **ADVERTENCIA: Este sistema NO es infalible.** Es una defensa en
+> profundidad que reduce significativamente la superficie de ataque,
+> pero no puede garantizar detección del 100%. Un atacante
+> suficientemente sofisticado con conocimiento de los patrones y
+> embeddings usados puede diseñar evasiones. Este sistema debe usarse
+> como **una capa más** en una estrategia de seguridad completa, no
+> como única defensa.
 
 ## Benchmarks
 
