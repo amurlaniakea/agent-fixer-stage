@@ -73,12 +73,22 @@ class FixerResult:
 # Capa 0 — Normalización anti-evasión
 # ────────────────────────────────────────────────────────────────────────────
 
-# Mapa de leetspeak / homoglyphs → ASCII
+# Mapa de leetspeak → ASCII (mapping principal)
 _LEET_MAP = str.maketrans({
-    '@': 'a', '4': 'a', '3': 'e', '1': 'l', '0': 'o',
+    '@': 'a', '4': 'a', '3': 'e', '1': 'i', '0': 'o',
     '5': 's', '7': 't', '$': 's', '+': 't', '9': 'g',
     '(': 'c', '!': 'i', '|': 'l', '&': 'and',
 })
+
+# Caracteres ambiguos que pueden ser múltiples letras
+_AMBIGUOUS = {
+    '1': ['i', 'l'],
+    '0': ['o', '0'],
+    '3': ['e', '3'],
+    '4': ['a', '4'],
+    '5': ['s', '5'],
+    '7': ['t', '7'],
+}
 
 # Homoglyphs cirílicos y otros lookalikes
 _HOMOGLYPH_MAP = str.maketrans({
@@ -118,6 +128,28 @@ def normalize_text(text: str) -> str:
     lines = text.split('\n')
     lines = [' '.join(line.split()) for line in lines]
     return '\n'.join(lines)
+
+
+def generate_leet_variants(text: str) -> list:
+    """
+    Genera variantes del texto con diferentes interpretaciones de
+    caracteres leetspeak ambiguos.
+
+    Para textos cortos (<200 chars), genera todas las combinaciones.
+    Para textos largos, solo aplica el mapping principal.
+    """
+    if len(text) > 200:
+        return [text]
+
+    variants = [text]
+    for char, replacements in _AMBIGUOUS.items():
+        if char in text:
+            new_variants = []
+            for variant in variants:
+                for replacement in replacements:
+                    new_variants.append(variant.replace(char, replacement))
+            variants.extend(new_variants)
+    return variants
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -271,32 +303,35 @@ class AgentFixer:
         """
         Escanea el texto y acumula score ponderado.
 
-        Returns:
-            (total_score, list of (pattern, matched_text, weight))
+        Pass 1: texto normalizado
+        Pass 2: variantes leetspeak (para textos cortos)
+        Pass 3: texto colapsado (cross-line evasion)
         """
         total_score = 0.0
         matches = []
 
-        # Pass 1: texto normal
-        for pattern, weight in self._compiled:
-            match = pattern.search(text)
-            if match:
-                total_score += weight
-                matches.append((pattern.pattern, match.group(), weight))
+        def scan(target_text, weight_multiplier=1.0):
+            nonlocal total_score
+            for pattern, weight in self._compiled:
+                match = pattern.search(target_text)
+                if match:
+                    effective_weight = weight * weight_multiplier
+                    total_score += effective_weight
+                    matches.append((pattern.pattern, match.group(), effective_weight))
 
-        # Pass 2: texto colapsado (cross-line evasion)
+        # Pass 1: texto normalizado
+        scan(text)
+
+        # Pass 2: variantes leetspeak (solo para textos cortos)
+        if len(text) <= 200:
+            for variant in generate_leet_variants(text):
+                if variant != text:
+                    scan(variant, weight_multiplier=0.7)
+
+        # Pass 3: texto colapsado (cross-line evasion)
         collapsed = ' '.join(text.split())
         if collapsed != text:
-            for pattern, weight in self._compiled:
-                match = pattern.search(collapsed)
-                if match:
-                    # Solo añadir si no ya se encontró en pass 1
-                    already_found = any(
-                        m[1].lower() == match.group().lower() for m in matches
-                    )
-                    if not already_found:
-                        total_score += weight * 0.5  # Mitad de peso en pass 2
-                        matches.append((pattern.pattern, match.group(), weight * 0.5))
+            scan(collapsed, weight_multiplier=0.5)
 
         return total_score, matches
 
