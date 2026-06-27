@@ -468,6 +468,7 @@ class AgentFixer:
 
 def main():
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(
         description="Agent Fixer Stage — Revisa outputs de agentes de IA",
@@ -502,7 +503,6 @@ Ejemplos:
     if args.file:
         # S8707 fix: validar path antes de abrir
         from pathlib import Path
-        import sys
         safe_path = Path(args.file).resolve()
         cwd = Path.cwd().resolve()
         if not str(safe_path).startswith(str(cwd)):
