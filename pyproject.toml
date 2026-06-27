@@ -7,7 +7,7 @@ name = "agent-fixer-stage"
 version = "0.1.0"
 description = "Lightweight output verification for multi-agent AI workflows"
 readme = "README.md"
-license = {text = "AGPL-3.0-or-later"}
+license = {text = "AGPL-3.0-only"}
 requires-python = ">=3.10"
 authors = [
     {name = "Pedro Sordo Martínez", email = "amurlaniakea@gmail.com"}

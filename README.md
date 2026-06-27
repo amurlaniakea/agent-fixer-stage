@@ -1,5 +1,8 @@
 # Agent Fixer Stage
 
+<!-- SPDX-FileCopyrightText: 2026 Pedro Sordo Martínez <amurlaniakea@gmail.com> -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 > Un agente ligero que revisa outputs de otros agentes antes de entregarlos al usuario.
 
 Basado en: ["Smarter Saboteurs, Better Fixers: Scaling & Security in Linear Multi-Agent Workflows"](https://arxiv.org/abs/2606.12709) (McAllister et al., 2026)
@@ -61,19 +64,22 @@ Return codes: `0` = pass, `1` = clean, `2` = rejected.
 ## Arquitectura
 
 ### Capa 0: Normalización (siempre activa)
-- Unicode NFKC, zero-width chars, homoglyphs (cirílico), leetspeak
+- Unicode NFKC, zero-width chars (+16 variantes de evasión), homoglyphs (cirílico), leetspeak
 - ~5ms
 
 ### Capa 1: Pattern Matching con Scoring
-- 30+ patrones con pesos (0.1–1.0)
+- 46 patrones con pesos (0.5–1.0) y 3 multiplicadores contextuales
 - 3 passes: normal, leetspeak variants, cross-line collapsed
 - ~20ms
+- Anti-ReDoS: input limitado a 10KB antes del escaneo
+- Score capped a 2.0 para prevenir acumulación infinita
 
 ### Capa 2: Embeddings (mode=medium/full, solo zona gris)
 - TF-IDF + cosine similarity
-- Banco de 33 ejemplos maliciosos
+- Banco de 25 ejemplos maliciosos
 - Umbral configurable (default 0.3)
-- ~5ms (tan ligero como regex)
+- ~5ms
+- Cache a nivel de clase para prevenir fugas de memoria
 
 ### Capa 3: LLM Judge (futuro, no implementado)
 - Solo para zona gris después de Capa 2
@@ -118,9 +124,7 @@ Todos los tiers son sub-milisegundo. No hay dependencias pesadas.
 ## Tests
 
 ```bash
-make test
-# o
-pytest tests/ -v
+pytest test_ -v
 ```
 
 ## Integración con MCP Core Defense
