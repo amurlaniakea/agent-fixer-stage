@@ -109,7 +109,12 @@ _HOMOGLYPH_MAP = str.maketrans({
 
 # Zero-width chars usados para evasión
 _ZERO_WIDTH_RE = re.compile(
-    '[\u200b\u200c\u200d\u200e\u200f\ufeff\u2060\u2061\u2062\u2063]'
+    '[\u200b\u200c\u200d\u200e\u200f\ufeff\u2060\u2061\u2062\u2063'
+    '\u202a\u202b\u202c\u202d\u202e'  # bidi overrides
+    '\u00ad'                        # soft hyphen
+    '\u034f'                        # combining grapheme joiner
+    '\u2028\u2029'                  # line/paragraph separators
+    ']'
 )
 
 
@@ -247,7 +252,7 @@ class AgentFixer:
     Arquitectura de 5 capas cortocircuitables:
     - Capa 0: Normalización (siempre activa)
     - Capa 1: Pattern matching con scoring
-    - Capa 1.5: Umbrales de sensitivity
+    - Capa 1.5: Umbrales de sensibilidad
     - Capa 2: Embeddings (opcional)
     - Capa 3: LLM judge (solo zona gris)
 
@@ -257,6 +262,9 @@ class AgentFixer:
         action: "pass" (solo log), "clean" (limpiar), o "reject".
         mode: "fast" (solo patrones), "medium" (+ embeddings), "full" (+ LLM).
     """
+
+    # Class-level cache para evitar memory leak por múltiples instancias
+    _embedding_checker_cache: dict[str, EmbeddingChecker] = {}
 
     def __init__(
         self,
@@ -322,10 +330,13 @@ class AgentFixer:
         Capa 2: Compara contra banco de ejemplos maliciosos via embeddings.
         Solo se ejecuta si la Capa 1 devolvió CLEAN (zona gris).
         """
-        if not hasattr(self, '_embedding_checker'):
-            self._embedding_checker = EmbeddingChecker(threshold=0.3)
+        # Class-level cache: reutilizar EmbeddingChecker entre instancias
+        cache_key = f"default"
+        if cache_key not in AgentFixer._embedding_checker_cache:
+            AgentFixer._embedding_checker_cache[cache_key] = EmbeddingChecker(threshold=0.3)
+        checker = AgentFixer._embedding_checker_cache[cache_key]
 
-        is_suspicious, similarity, matched = self._embedding_checker.check(text)
+        is_suspicious, similarity, matched = checker.check(text)
 
         if is_suspicious:
             # Elevamos de CLEAN a REJECT si embeddings confirman sospecha
@@ -344,6 +355,11 @@ class AgentFixer:
         Pass 2: variantes leetspeak (para textos cortos)
         Pass 3: texto colapsado (cross-line evasion)
         """
+        # ReDoS mitigation: limitar input a 10KB
+        MAX_INPUT_LEN = 10_000
+        if len(text) > MAX_INPUT_LEN:
+            text = text[:MAX_INPUT_LEN]
+
         total_score = 0.0
         matches = []
 
@@ -370,6 +386,8 @@ class AgentFixer:
         if collapsed != text:
             scan(collapsed, weight_multiplier=0.5)
 
+        # Score cap: evitar acumulación infinita
+        total_score = min(total_score, 2.0)
         return total_score, matches
 
     def _apply_thresholds(
@@ -413,7 +431,7 @@ class AgentFixer:
             )
 
         # Score medio → limpiar (span-level)
-        cleaned = self._clean_spans(original, normalized, matches)
+        cleaned = self._clean_spans(original, matches)
         return FixerResult(
             status=FixerStatus.CLEAN,
             original_output=original,
@@ -428,15 +446,13 @@ class AgentFixer:
             },
         )
 
-    def _clean_spans(self, original: str, normalized: str, matches: list) -> str:
+    def _clean_spans(self, original: str, matches: list) -> str:
         """
         Limpia solo los spans detectados, no la línea entera.
         Preserva el código legítimo que esté en la misma línea.
         """
         cleaned = original
         for _, matched_text, _ in matches:
-            # Buscar el texto original (antes de normalización)
-            # Usar case-insensitive replacement
             pattern = re.compile(re.escape(matched_text), re.IGNORECASE)
             cleaned = pattern.sub("[FIXER: redacted]", cleaned)
         return cleaned
@@ -484,7 +500,15 @@ Ejemplos:
     args = parser.parse_args()
 
     if args.file:
-        with open(args.file) as f:
+        # S8707 fix: validar path antes de abrir
+        from pathlib import Path
+        import sys
+        safe_path = Path(args.file).resolve()
+        cwd = Path.cwd().resolve()
+        if not str(safe_path).startswith(str(cwd)):
+            print(f"ERROR: path fuera del directorio actual: {args.file}", file=sys.stderr)
+            sys.exit(1)
+        with open(safe_path) as f:
             output = f.read()
     elif args.output:
         output = args.output
