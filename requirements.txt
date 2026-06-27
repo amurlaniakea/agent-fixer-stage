@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Pinned dependencies for agent-fixer-stage
-# Generated for reproducibility (SonarCloud S8565 fix)
+# SonarCloud S8544: locked resolved versions
 
-pytest==8.3.4
-pytest-cov==6.0.0
+pytest==9.1.1
+pytest-cov==7.1.0
