@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  test-and-analyze:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -28,29 +28,28 @@ jobs:
           python -m pip install --upgrade pip --only-binary :all:
           pip install --only-binary :all: pytest==8.3.4 pytest-cov==6.0.0
 
-      - name: Run tests
-        run: python -m pytest test_*.py -v --tb=short --cov=. --cov-report=xml --cov-report=term-missing
+      - name: Run tests with coverage
+        run: python -m pytest test_*.py -v --tb=short --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
 
   sonarcloud:
-    needs: test
+    needs: test-and-analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
         with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip --only-binary :all:
-          pip install --only-binary :all: pytest==8.3.4 pytest-cov==6.0.0
-
-      - name: Run tests with coverage
-        run: python -m pytest test_*.py -v --cov=. --cov-report=xml
+          name: coverage-report
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@master
