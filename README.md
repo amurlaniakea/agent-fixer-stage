@@ -1,7 +1,9 @@
 # Agent Fixer Stage
 
 <!-- SPDX-FileCopyrightText: 2026 Pedro Sordo Martínez <amurlaniakea@gmail.com> -->
-<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+
+Por Pedro Sordo Martínez (Sil) — amurlaniakea@gmail.com
 
 > Un agente ligero que revisa outputs de otros agentes antes de entregarlos al usuario.
 
@@ -139,3 +141,5 @@ Son capas complementarias del mismo problema.
 ## License
 
 AGPL-3.0-or-later
+
+Copyright (C) 2026 Pedro Sordo Martínez amurlaniakea@gmail.com
