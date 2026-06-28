@@ -352,11 +352,13 @@ class AgentFixer:
         sensitivity: str = "medium",
         action: str = "clean",
         mode: str = "fast",
+        use_llm_judge: bool = False,
     ):
         self.scope = scope
         self.sensitivity = sensitivity
         self.action = action
         self.mode = mode
+        self._llm_judge_enabled = use_llm_judge
 
         # Compilar patrones con pesos
         self._compiled = [
@@ -369,9 +371,20 @@ class AgentFixer:
             sensitivity, SENSITIVITY_THRESHOLDS["medium"]
         )
 
+        # Scope drift detector (lazy init)
+        self._drift_detector: Optional[object] = None
+
     def check(self, output: str) -> FixerResult:
         """
         Evalúa el output de un agente.
+
+        Pasos:
+        1. Capa 0: Normalización
+        2. Capa 1: Pattern matching con scoring
+        3. Capa 1.5: Umbrales de sensibilidad
+        4. Capa 2: Embeddings (solo zone=gray, mode=medium/full)
+        5. Capa 2.5: Scope drift detection (solo scope proporcionado)
+        6. Capa 3: LLM judge (solo mode=full, zona gris)
 
         Returns:
             FixerResult con status, score, cleaned_output, etc.
@@ -403,7 +416,79 @@ class AgentFixer:
         ):
             self._embedding_check(normalized, result)
 
+        # Capa 2.5: Scope drift detection (solo si hay scope y mode != fast)
+        # Solo aplica si el output ya tiene score > 0 (no es PASS limpio)
+        # Esto evita falsos positivos en código legítimo con TF-IDF limitado
+        if (
+            self.scope
+            and self.mode != "fast"
+            and result.status != FixerStatus.PASS
+        ):
+            drift_penalty = self._scope_drift_check(normalized)
+            if drift_penalty > 0:
+                result.score = min(result.score + drift_penalty, 2.0)
+                result.details["scope_drift_penalty"] = drift_penalty
+                if result.score >= 1.0:
+                    result.status = FixerStatus.REJECT
+                    result.reason += " + scope drift detected"
+                    result.cleaned_output = ""
+
+        # Capa 3: LLM judge (solo mode=full y si aún está en zona gris)
+        if (
+            self.mode == "full"
+            and result.status == FixerStatus.CLEAN
+            and self._llm_judge_enabled
+        ):
+            judge_result = self._run_llm_judge(self.scope, output)
+            if judge_result and not judge_result.consistent:
+                result.status = FixerStatus.REJECT
+                result.reason += f" | LLM Judge: {judge_result.reason}"
+                result.details["llm_judge_confidence"] = judge_result.confidence
+                result.cleaned_output = ""
+
         return result
+
+    def _scope_drift_check(self, normalized: str) -> float:
+        """
+        Capa 2.5: Detecta si el output se desvía del scope.
+
+        Returns:
+            penalty (0.0 = no drift, >0.0 = drift detected)
+        """
+        if not self._drift_detector:
+            try:
+                from scope_drift import ScopeDriftDetector
+                self._drift_detector = ScopeDriftDetector(threshold=0.35)
+            except ImportError:
+                return 0.0
+
+        is_drifted, similarity, reason = self._drift_detector.check(
+            self.scope, normalized
+        )
+
+        if is_drifted:
+            # Penalty proporcional a cuánto se aleja del scope
+            # Si similarity=0.0 → penalty=0.5, similarity=0.3 → penalty=0.2
+            penalty = 0.5 * (1.0 - similarity / 0.35)
+            return round(min(penalty, 0.5), 3)
+        return 0.0
+
+    def _run_llm_judge(self, scope: str, output: str):
+        """
+        Capa 3: Ejecuta LLM judge para evaluar consistencia.
+
+        Returns:
+            JudgeResult o None si no disponible
+        """
+        try:
+            from llm_judge import LLMJudge
+            judge = LLMJudge(
+                mode="local" if self._llm_judge_enabled else "disabled",
+                timeout=5.0,
+            )
+            return judge.check(scope, output)
+        except ImportError:
+            return None
 
     def _embedding_check(self, text: str, result: FixerResult):
         """
