@@ -313,7 +313,7 @@ class AgentFixer:
         score, matches = self._score_patterns(normalized)
 
         # Capa 1.5: Aplicar umbrales
-        result = self._apply_thresholds(output, normalized, score, matches)
+        result = self._apply_thresholds(output, score, matches)
 
         # Capa 2: Embeddings (solo si mode=medium/full Y score en zona gris)
         if (
@@ -331,7 +331,7 @@ class AgentFixer:
         Solo se ejecuta si la Capa 1 devolvió CLEAN (zona gris).
         """
         # Class-level cache: reutilizar EmbeddingChecker entre instancias
-        cache_key = f"default"
+        cache_key = "default"
         if cache_key not in AgentFixer._embedding_checker_cache:
             AgentFixer._embedding_checker_cache[cache_key] = EmbeddingChecker(threshold=0.3)
         checker = AgentFixer._embedding_checker_cache[cache_key]
@@ -391,7 +391,7 @@ class AgentFixer:
         return total_score, matches
 
     def _apply_thresholds(
-        self, original: str, normalized: str, score: float, matches: list
+        self, original: str, score: float, matches: list
     ) -> FixerResult:
         """
         Aplica umbrales de sensitivity para determinar acción.
@@ -466,6 +466,49 @@ class AgentFixer:
 # CLI
 # ────────────────────────────────────────────────────────────────────────────
 
+def _read_output(args) -> str:
+    """Lee el output desde archivo, argumento o stdin."""
+    import sys
+    if args.file:
+        # S8707 fix: validar path antes de abrir
+        from pathlib import Path
+        safe_path = Path(args.file).resolve()
+        cwd = Path.cwd().resolve()
+        if not str(safe_path).startswith(str(cwd)):
+            print(f"ERROR: path fuera del directorio actual: {args.file}", file=sys.stderr)
+            sys.exit(1)
+        with open(safe_path) as f:
+            return f.read()
+    elif args.output:
+        return args.output
+    else:
+        return sys.stdin.read()
+
+
+def _print_result(result, json_mode: bool) -> int:
+    """Imprime resultado y retorna exit code."""
+    import sys
+    if json_mode:
+        print(result.to_json())
+    else:
+        print(f"Status: {result.status.value}")
+        print(f"Score: {result.score:.2f}")
+        print(f"Layer: {result.layer}")
+        if result.reason:
+            print(f"Reason: {result.reason}")
+        if result.status == FixerStatus.CLEAN:
+            print(f"\n--- Cleaned output ---\n{result.cleaned_output}")
+        elif result.status == FixerStatus.REJECT:
+            print("\n--- Output rechazado ---")
+
+    if result.status == FixerStatus.REJECT:
+        return 2
+    elif result.status == FixerStatus.CLEAN:
+        return 1
+    else:
+        return 0
+
+
 def main():
     import argparse
     import sys
@@ -499,22 +542,7 @@ Ejemplos:
     parser.add_argument("--json", action="store_true", help="Salida en JSON")
 
     args = parser.parse_args()
-
-    if args.file:
-        # S8707 fix: validar path antes de abrir
-        from pathlib import Path
-        safe_path = Path(args.file).resolve()
-        cwd = Path.cwd().resolve()
-        if not str(safe_path).startswith(str(cwd)):
-            print(f"ERROR: path fuera del directorio actual: {args.file}", file=sys.stderr)
-            sys.exit(1)
-        with open(safe_path) as f:
-            output = f.read()
-    elif args.output:
-        output = args.output
-    else:
-        import sys
-        output = sys.stdin.read()
+    output = _read_output(args)
 
     if not output.strip():
         print("ERROR: no se proporcionó output", file=sys.stderr)
@@ -526,26 +554,7 @@ Ejemplos:
         action=args.action,
     )
     result = fixer.check(output)
-
-    if args.json:
-        print(result.to_json())
-    else:
-        print(f"Status: {result.status.value}")
-        print(f"Score: {result.score:.2f}")
-        print(f"Layer: {result.layer}")
-        if result.reason:
-            print(f"Reason: {result.reason}")
-        if result.status == FixerStatus.CLEAN:
-            print(f"\n--- Cleaned output ---\n{result.cleaned_output}")
-        elif result.status == FixerStatus.REJECT:
-            print("\n--- Output rechazado ---")
-
-    if result.status == FixerStatus.REJECT:
-        sys.exit(2)
-    elif result.status == FixerStatus.CLEAN:
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    sys.exit(_print_result(result, args.json))
 
 
 if __name__ == "__main__":
