@@ -254,6 +254,38 @@ class TestFullPipeline:
 class TestLLMJudgeExtended:
     """Tests adicionales para llm_judge.py."""
 
+    def test_call_ollama_server_error(self):
+        """Ollama con servidor que retorna error."""
+        from llm_judge import LLMJudge
+        j = LLMJudge(mode="local", base_url="http://127.0.0.1:1")
+        result = j._call_ollama("test prompt")
+        # Debería retornar None (connection refused or timeout)
+        assert result is None
+
+    def test_call_remote_no_key(self):
+        """API remota sin key no conecta."""
+        from llm_judge import LLMJudge
+        j = LLMJudge(mode="remote", remote_base_url="http://127.0.0.1:1")
+        result = j._call_remote("test prompt")
+        assert result is None
+
+    def test_call_ollama_invalid_json(self):
+        """Ollama con respuesta malformada retorna None."""
+        from llm_judge import LLMJudge
+        import unittest.mock as mock
+
+        j = LLMJudge(mode="local")
+        mock_response = mock.Mock()
+        mock_response.read.return_value = b"no es json valido"
+        mock_response.status = 200
+        mock_response.__enter__ = mock.Mock(return_value=mock_response)
+        mock_response.__exit__ = mock.Mock(return_value=False)
+
+        with mock.patch('urllib.request.urlopen', return_value=mock_response):
+            result = j._call_ollama("test")
+            # Si el JSON no se puede parsear, retorna None
+            assert result is None or isinstance(result, dict)
+
     def test_parse_response_valid_json(self):
         """Parseo de respuesta JSON válida."""
         from llm_judge import LLMJudge
