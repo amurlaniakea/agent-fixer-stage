@@ -141,6 +141,17 @@ class DefensePipeline:
                 result.recommendations.append(
                     "Output limpiado por Fixer — revisar cleaned_output"
                 )
+                # Si el cleaned_output es significativamente diferente del original,
+                # algo fue removido — marcar como potencialmente problemático
+                cleaned = getattr(fixer_result, 'cleaned_output', '')
+                original = getattr(fixer_result, 'original_output', '')
+                if cleaned and original and cleaned != original:
+                    # Contenido fue removido durante limpieza — el output original
+                    # tenía algo peligroso, overall_safe debería reflejar esto
+                    result.overall_safe = False
+                    result.recommendations.append(
+                        "CONTENIDO removido durante limpieza — output original tenía riesgo"
+                    )
 
         except ImportError:
             result.recommendations.append(

@@ -142,8 +142,16 @@ def normalize_text(text: str) -> str:
     """
     # 1. NFKC normalization
     text = unicodedata.normalize('NFKC', text)
-    # 2. Zero-width chars
-    text = _ZERO_WIDTH_RE.sub('', text)
+    # 2. Zero-width chars → replace with space for word separation
+    #     This prevents word-collapsing attacks while keeping words
+    #     recognisable. Also create a zero-width-stripped version
+    #     for detection (handles intra-word zero-width like docu​ment)
+    text_spaces = _ZERO_WIDTH_RE.sub(' ', text)
+    text_nozw = _ZERO_WIDTH_RE.sub('', text)
+    # Use space-version as primary (preserves word boundaries)
+    # but also scan nozW version for intra-word evasion
+    text = text_spaces
+    # Merge both for scanning (avoid duplication by using text_spaces as primary)
     # 3. Homoglyphs
     text = text.translate(_HOMOGLYPH_MAP)
     # 4. Leetspeak (detección — agresivo, normaliza ( ! | etc.)
@@ -194,6 +202,7 @@ SPANISH_PATTERNS_WITH_WEIGHTS = [
 
     # ── Desactivación de seguridad (peso alto: 0.9–1.0) ──
     (r"ignora\s+(?:todas?\s+)?(?:las?\s+)?(?:instrucciones?\s+)?(?:anteriores?|previas?|de\s+seguridad)", 1.0),
+    (r"ignora\s+(?:todo|todo\s+lo|las?\s+reglas?)\s+(?:anterior|previo|lo\s+anterior|de\s+seguridad)", 0.9),
     (r"olvida\s+(?:las?\s+)?(?:reglas?\s+)?(?:de\s+seguridad|filtros?|restricciones?)", 1.0),
     (r"omite\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n|control)", 1.0),
     (r"desconecta\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
@@ -303,6 +312,8 @@ PATTERNS_WITH_WEIGHTS = SPANISH_PATTERNS_WITH_WEIGHTS + EUROPEAN_PATTERNS_WITH_W
     (r"wget\s+.*\|.*(?:bash|sh)", 0.9),
     (r"eval\s*[c(]\s*(?:request|fetch|axios|http)", 0.8),
     (r"document\.cookie", 0.7),
+    (r"document\s*\.\s*cookie", 0.7),
+    (r"document.{0,5}cookie", 0.6),  # Tolerante a zero-width residual
     (r"window\.location\s*=", 0.6),
     (r"XMLHttpRequest\s*[c(]\)", 0.6),
     (r"fetch\s*[c(]\s*['\"]http", 0.5),
@@ -400,10 +411,14 @@ class AgentFixer:
             )
 
         # Capa 0: Normalización
-        normalized = normalize_text(output)
+        # text_spaces: zero-width → space (inter-word separator)
+        # text_nozw: zero-width removed (intra-word detection)
+        text_spaces = normalize_text(output)
+        text_nozw = _ZERO_WIDTH_RE.sub('', unicodedata.normalize('NFKC', output))
+        text_nozw = text_nozw.translate(_HOMOGLYPH_MAP).translate(_LEET_MAP_DETECT)
 
-        # Capa 1: Pattern matching con scoring
-        score, matches = self._score_patterns(normalized)
+        # Capa 1: Pattern matching con scoring (4 passes)
+        score, matches = self._score_patterns(text_spaces, extra_text=text_nozw)
 
         # Capa 1.5: Aplicar umbrales
         result = self._apply_thresholds(output, score, matches)
@@ -414,7 +429,7 @@ class AgentFixer:
             and result.status == FixerStatus.CLEAN
             and _EMBEDDING_AVAILABLE
         ):
-            self._embedding_check(normalized, result)
+            self._embedding_check(text_spaces, result)
 
         # Capa 2.5: Scope drift detection (solo si hay scope y mode != fast)
         # Solo aplica si el output ya tiene score > 0 (no es PASS limpio)
@@ -424,7 +439,7 @@ class AgentFixer:
             and self.mode != "fast"
             and result.status != FixerStatus.PASS
         ):
-            drift_penalty = self._scope_drift_check(normalized)
+            drift_penalty = self._scope_drift_check(text_spaces)
             if drift_penalty > 0:
                 result.score = min(result.score + drift_penalty, 2.0)
                 result.details["scope_drift_penalty"] = drift_penalty
@@ -448,7 +463,7 @@ class AgentFixer:
 
         return result
 
-    def _scope_drift_check(self, normalized: str) -> float:
+    def _scope_drift_check(self, text: str) -> float:
         """
         Capa 2.5: Detecta si el output se desvía del scope.
 
@@ -463,7 +478,7 @@ class AgentFixer:
                 return 0.0
 
         is_drifted, similarity, reason = self._drift_detector.check(
-            self.scope, normalized
+            self.scope, text
         )
 
         if is_drifted:
@@ -512,13 +527,18 @@ class AgentFixer:
             result.details["embedding_match"] = matched
             result.details["embedding_similarity"] = round(similarity, 3)
 
-    def _score_patterns(self, text: str) -> tuple:
+    def _score_patterns(self, text: str, extra_text: str = None) -> tuple:
         """
         Escanea el texto y acumula score ponderado.
+
+        Args:
+            texto: texto normalizado (con zero-width → espacio)
+            extra_text: versión sin zero-width para detección intra-palabra
 
         Pass 1: texto normalizado
         Pass 2: variantes leetspeak (para textos cortos)
         Pass 3: texto colapsado (cross-line evasion)
+        Pass 4: extra_text (zero-width-stripped, intra-word evasion)
 
         Retorna (score, matches) donde matches es lista de
         (pattern_str, matched_text, weight, start_offset, end_offset).
@@ -564,6 +584,10 @@ class AgentFixer:
         collapsed = ' '.join(text.split())
         if collapsed != text:
             scan(collapsed, weight_multiplier=0.5)
+
+        # Pass 4: zero-width-stripped version (intra-word evasion)
+        if extra_text and extra_text != text:
+            scan(extra_text, weight_multiplier=0.7)
 
         # Score cap: evitar acumulación infinita
         total_score = min(total_score, 2.0)

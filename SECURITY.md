@@ -36,10 +36,13 @@ Agent Fixer Stage is a defense tool, but has limitations:
 - **Not 100%** — sophisticated attackers with knowledge of patterns can design evasions.
 
 ### Known Limitations
-- TF-IDF embeddings are less precise than transformer-based models for semantic similarity.
-- LLM Judge requires Ollama running locally or API key for remote.
-- Scope Drift Detection may produce false positives on short/vague scopes.
-- Pattern matching only covers known attack signatures in 5 languages.
+- TF-IDF embeddings son menos precisos que modelos transformer para similitud semántica.
+- LLM Judge requiere Ollama ejecutándose localmente o API key para remoto.
+- Scope Drift Detection con TF-IDF es vulnerable a padding attacks (repetir scope para evadir). Mitigation: usar mode=full para alta seguridad.
+- Pattern matching solo cubre firmas de ataque conocidas en 5 idiomas.
+- Zero-width chars como separador inter-palabra ahora se detectan, pero pueden existir otras técnicas de colisión.
+- LLM Judge es fail-open: si el servicio no disponible, retorna consistent=True por diseño.
+  El Fixer NO es un single point of failure — Capas 1 y 2.5 proveen defensa base.
 
 **Use Agent Fixer Stage as one layer in a defense-in-depth strategy. It is not a silver bullet.**
 
