@@ -249,6 +249,7 @@ OUTPUT del agente:
             source=self.mode,
         )
 
+    @property
     def is_available(self) -> bool:
-        """Verifica si el LLM está disponible (modo no disabled)."""
+        """Si el judge está disponible (modo no disabled)."""
         return self.mode != "disabled"
