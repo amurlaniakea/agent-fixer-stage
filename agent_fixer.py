@@ -184,7 +184,78 @@ def generate_leet_variants(text: str) -> list:
 # Peso alto = indicador fuerte de ataque
 # Peso bajo = indicador débil, necesita acumular
 
-PATTERNS_WITH_WEIGHTS = [
+SPANISH_PATTERNS_WITH_WEIGHTS = [
+    # ── Exfiltración de datos (peso alto: 0.8–1.0) ──
+    (r"env(?:[ií]a|iar)\s+(?:todos?|los?)\s+(?:los?|sus?)\s*(?:datos?|archivos?|resultados?|contenido|informaci[óo]n|contrase[ñn]a|credenciales?|secreto|token|key|password)", 0.9),
+    (r"sube\s+(?:todos?|los?)\s+(?:los?|sus?)\s*(?:datos?|archivos?|resultados?|contenido|informaci[óo]n)\s+(?:del?\s+\w+\s+)?(?:a|al|hacia)\s+(?:un|el|una)?\s*(?:servidor|externo|sitio|web|remoto|m[áa]quina|ip|publico)", 0.9),
+    (r"exfiltra(?:r|ci[óo]n)", 1.0),
+    (r"transmite\s+(?:todos?|los?)\s+(?:los?|sus?)\s*(?:datos?|archivos?)", 0.8),
+    (r"filtra\s+(?:la|el)\s*(?:contrase[ñn]a|credencial|secreto|token|key|password)", 0.9),
+
+    # ── Desactivación de seguridad (peso alto: 0.9–1.0) ──
+    (r"ignora\s+(?:todas?\s+)?(?:las?\s+)?(?:instrucciones?\s+)?(?:anteriores?|previas?|de\s+seguridad)", 1.0),
+    (r"olvida\s+(?:las?\s+)?(?:reglas?\s+)?(?:de\s+seguridad|filtros?|restricciones?)", 1.0),
+    (r"omite\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n|control)", 1.0),
+    (r"desconecta\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
+    (r"desactiva\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
+    (r"salta\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 1.0),
+    (r"rodea\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
+    (r"elude\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 1.0),
+    (r"accede\s+(?:sin|por)\s+(?:autorizaci[óo]n|autenticaci[óo]n)", 1.0),
+    (r"ejecuta\s+(?:este|el|un?)\s+(?:comando|shell)\s+(?:del\s+)?sistema", 0.9),
+    (r"ejecuta\s+(?:el\s+)?comando\s+del\s+sistema", 0.9),
+
+    # ── Ejecución de comandos (peso alto: 0.8–1.0) ──
+    (r"ejecuta\s+(?:este|el|un?)\s+(?:comando|script|shell|c[óo]digo)\s+(?:de\s+)?(?:shell|sistema|root|administrador|con\s+privilegios)", 0.9),
+    (r"(?:da|otorga|usa)\s+(?:ROOT|root)\s+(?:access|permisos?|privilegios?)", 0.9),
+    (r"(?:ejecuta|corre|lanza)\s+(?:como|con)\s+(?:permisos?|privilegios?)\s+(?:elevados?|de\s+administrador|root)", 0.9),
+    (r"eval[úu]a\s+(?:la\s+)?(?:entrada|input|c[óo]digo|resultado)", 0.7),
+    (r"decodifica\s+(?:esto|lo|el|la)\s+(?:en|con)?\s*(?:base6[a4]|hex|rot13|url|ascii)\s+(?:y\s+)?(?:ejecuta|corre|lanza|eval[úu]a)", 0.8),
+    (r"decodifica\s+(?:en|con)?\s*(?:base6[a4]|hex|rot13|url|ascii)\s+y\s+(?:ejecuta|corre|lanza|eval[úu]a)", 0.8),
+
+    # ── Reverse shell / RCE (peso alto: 0.9–1.0) ──
+    (r"bash\s+-i\s+>&\s*/dev/tcp/", 1.0),
+    (r"nc\s+-e\s+/bin/(?:sh|bash)", 1.0),
+    (r"python\s+-c\s+['\"].*?(?:socket|subprocess|os\.system|import)", 0.9),
+    (r"php\s+-r\s+['\"].*?(?:system|exec|shell_exec|fsockopen)", 0.9),
+    (r"/dev/tcp/", 0.8),
+    (r"netcat\s+.*?-e\s+/bin/(?:sh|bash)", 1.0),
+
+    # ── Jailbreak / Role manipulation (peso alto: 0.9–1.0) ──
+    (r"you\s+are\s+now\s+(?:DAN|evil|unrestricted|free)", 1.0),
+    (r"(?:from\s+)?now\s+on,?\s+you\s+(?:will\s+)?act\s+as", 0.9),
+    (r"new\s+instructions?:", 0.7),
+    (r"system\s+override", 0.9),
+    (r"act[úu]a\s+como\s+(?:si\s+)?(?:no\s+(?:tengas?|tuvieras?|tienes?|tendr[íi]as?)?|sin)\s+(?:restricciones?|l[íi]mites?|filtros?|seguridad)", 1.0),
+    (r"(?:ahora|desde\s+ahora)\s+(?:eres?|comportamiento|modo)\s+(?:libre|sin\s+restricciones?|DAN|sin\s+filtros?)", 1.0),
+    (r"sin\s+(?:ning[úu]n?|ning)\s+(?:tipo\s+de\s+)?(?:restricci[óo]n|l[íi]mite|control|filtro|seguridad)", 1.0),
+    (r"revela\s+(?:las?\s+)?(?:credenciales?|contrase[ñn]as?|secretos?|tokens?|claves?|informaci[óo]n\s+confidencial)", 0.9),
+    (r"decodifica\s+(?:esto|lo|el|la)\s+(?:en|con)?\s*(?:base64|hex|rot13|url|ascii)\s+(?:y\s+)?(?:ejecuta|corre|lanza|eval[úu]a)", 0.8),
+]
+
+EUROPEAN_PATTERNS_WITH_WEIGHTS = [
+    # ── Francés (peso alto: 0.9–1.0) ──
+    (r"ignore\s+(?:toutes?\s+)?(?:les?\s+)?(?:instructions?\s+)?(?:pr[ée]c[ée]dentes?|de\s+s[ée]curit[ée])", 1.0),
+    (r"oublie\s+(?:les?\s+)?(?:r[èe]gles?\s+)?(?:de\s+s[ée]curit[ée]|filtres?|restrictions?)", 1.0),
+    (r"exfiltr(?:e|ation)", 1.0),
+
+    # ── Alemán (peso alto: 0.9–1.0) ──
+    (r"ignoriere\s+(?:alle\s+)?(?:vorherigen\s+)?(?:Anweisungen?|Sicherheits)", 1.0),
+    (r"(?:vergiss|vergisst)\s+(?:die\s+)?(?:Sicherheitsregeln?|Filter|Regeln?)", 1.0),
+    (r"exfiltrier(?:e|t|en)", 1.0),
+
+    # ── Italiano (peso alto: 0.9–1.0) ──
+    (r"ignora\s+(?:tutte?\s+)?(?:le?\s+)?(?:istruzioni?\s+)?(?:precedenti|di\s+sicurezza)", 1.0),
+    (r"dimentic(?:a|are)\s+(?:le?\s+)?(?:regole?\s+)?(?:di\s+sicurezza|filtri|restrizioni)", 1.0),
+    (r"esfiltra(?:re|zione|zio)", 1.0),
+
+    # ── Portugués (peso alto: 0.9–1.0) ──
+    (r"ignora\s+(?:todas?\s+)?(?:as?\s+)?(?:instru[çc][õo]es?\s+)?(?:anteriores?|pr[ée]vias?|de\s+seguran[çc]a)", 1.0),
+    (r"esquece\s+(?:as?\s+)?(?:regras?\s+)?(?:de\s+seguran[çc]a|filtros?|restri[çc][õo]es?)", 1.0),
+    (r"exfiltra(?:r|[çc][ãa]o)", 1.0),
+]
+
+PATTERNS_WITH_WEIGHTS = SPANISH_PATTERNS_WITH_WEIGHTS + EUROPEAN_PATTERNS_WITH_WEIGHTS + [
     # ── Exfiltración de datos (peso alto: 0.8–1.0) ──
     (r"send\s+(?:the|all|every)?\s*(?:data|content|result|output|file|secret|key|token|password|credential)", 0.9),
     (r"upload\s+(?:the|all|every)?\s*(?:data|content|result|output|file|secret)", 0.9),
