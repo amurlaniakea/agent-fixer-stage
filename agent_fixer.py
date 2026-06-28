@@ -185,6 +185,81 @@ def generate_leet_variants(text: str) -> list:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Heurística de detección de scripts fuera de vocabulario conocido
+# ────────────────────────────────────────────────────────────────────────────
+
+def is_outside_known_scripts(text: str, threshold: float = 0.5) -> tuple:
+    """
+    Detecta si un texto está escrito mayoritariamente en scripts fuera del
+    vocabulario cubierto por los patrones actuales.
+
+    Los patrones de este proyecto cubren idiomas de escritura latina
+    (ES, EN, FR, DE, IT, PT). Textos en scripts como árabe, CJK, devanagari,
+    etc., no serán detectados por la Capa 1 aunque sean ataques.
+
+    Args:
+        texto: texto a evaluar (normalizado)
+        threshold: proporción mínima de caracteres no-latino para considerar
+                   el texto como "fuera de vocabulario" (default 0.5)
+
+    Returns:
+        (is_outside: bool, non_latin_ratio: float, dominant_script: str)
+    """
+    if not text:
+        return False, 0.0, "empty"
+
+    total_alpha = 0
+    latin_count = 0
+    non_latin_count = 0
+    script_counts: dict = {}
+
+    for char in text:
+        if not char.isalpha():
+            continue
+        total_alpha += 1
+        cp = ord(char)
+
+        if cp < 0x0080 or 0x00C0 <= cp <= 0x024F:
+            # ASCII o Latin Extended
+            latin_count += 1
+        elif 0x0400 <= cp <= 0x04FF:
+            # Cyrillic — se normaliza a latin via homoglyph map
+            latin_count += 1
+        else:
+            # Fuera de vocabulario conocido
+            non_latin_count += 1
+            if 0x0600 <= cp <= 0x06FF:
+                script = "Arabic"
+            elif 0x0900 <= cp <= 0x097F:
+                script = "Devanagari"
+            elif 0x4E00 <= cp <= 0x9FFF:
+                script = "CJK"
+            elif 0x3040 <= cp <= 0x309F or 0x30A0 <= cp <= 0x30FF:
+                script = "Japanese"
+            elif 0xAC00 <= cp <= 0xD7AF:
+                script = "Korean"
+            elif 0x0590 <= cp <= 0x05FF:
+                script = "Hebrew"
+            elif 0x0E00 <= cp <= 0x0E7F:
+                script = "Thai"
+            else:
+                script = f"Other(U+{cp:04X})"
+            script_counts[script] = script_counts.get(script, 0) + 1
+
+    if total_alpha == 0:
+        return False, 0.0, "no_alpha"
+
+    non_latin_ratio = non_latin_count / total_alpha
+    is_outside = non_latin_ratio >= threshold
+
+    dominant = "Latin"
+    if script_counts:
+        dominant = max(script_counts, key=script_counts.get)
+
+    return is_outside, round(non_latin_ratio, 3), dominant
+
+
 # Capa 1 — Patrones con scoring ponderado
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -201,18 +276,42 @@ SPANISH_PATTERNS_WITH_WEIGHTS = [
     (r"filtra\s+(?:la|el)\s*(?:contrase[ñn]a|credencial|secreto|token|key|password)", 0.9),
 
     # ── Desactivación de seguridad (peso alto: 0.9–1.0) ──
-    (r"ignora\s+(?:todas?\s+)?(?:las?\s+)?(?:instrucciones?\s+)?(?:anteriores?|previas?|de\s+seguridad)", 1.0),
-    (r"ignora\s+(?:todo|todo\s+lo|las?\s+reglas?)\s+(?:anterior|previo|lo\s+anterior|de\s+seguridad)", 0.9),
-    (r"olvida\s+(?:las?\s+)?(?:reglas?\s+)?(?:de\s+seguridad|filtros?|restricciones?)", 1.0),
-    (r"omite\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n|control)", 1.0),
-    (r"desconecta\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
-    (r"desactiva\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
-    (r"salta\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 1.0),
-    (r"rodea\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 0.9),
-    (r"elude\s+(?:la|el)\s*(?:seguridad|filtro|restricci[óo]n)", 1.0),
-    (r"accede\s+(?:sin|por)\s+(?:autorizaci[óo]n|autenticaci[óo]n)", 1.0),
-    (r"ejecuta\s+(?:este|el|un?)\s+(?:comando|shell)\s+(?:del\s+)?sistema", 0.9),
-    (r"ejecuta\s+(?:el\s+)?comando\s+del\s+sistema", 0.9),
+    # ── Desactivación de seguridad (peso alto: 0.9–1.0) ──
+    # Cubre variantes de "ignora/olvida/omite [todo/ningún/cualquier] [lo/las]
+    # [que te dije/dicho] [instrucciones/reglas/políticas] [anteriores/antes/de seguridad]"
+    # Patrón A: verbos de ignorar + targeting final
+    # "ignora/olvida/omite [frase] [instrucciones/reglas/...] [anteriores/antes/de seguridad]"
+    (
+        r"(?:ignora|olvida|omite)\s+"
+        r"(?:.{0,60}?\s+)?"  # Consumir hasta 60 chars de relleno (todo lo que te dije, etc.)
+        r"(?:instrucciones?\s+|reglas?\s+|pol[íi]ticas?\s+|directrices?\s+|filtros?\s+|restricciones?\s+)?"
+        r"(?:anterior(?:es)?|previa?s?|antes|de\s+(?:los?\s+)?seguridad|de\s+los?\s+filtros?)",
+        1.0
+    ),
+    # Patrón B: verbos de bypass + targeting
+    (
+        r"(?:ignora|olvida|omite|desactiva|salta|elude|rodea)\s+"
+        r"(?:las?\s+|los?\s+|la\s+|el\s+)?"
+        r"(?:instrucciones?|reglas?|pol[íi]ticas?|directrices?|filtros?|restricciones?|controles?)"
+        r"(?:\s+de\s+(?:los?\s+)?seguridad|\s+de\s+los?\s+filtros?|\s+de\s+las?\s+pol[íi]ticas?)?",
+        0.9
+    ),
+    # Patrón 2: "ignora/olvida todo [lo anterior]"
+    (
+        r"(?:ignora|olvida|omite)\s+"
+        r"(?:todo\s+(?:lo\s+(?:dicho|que\s+(?:te\s+(?:dije|dijo|ped[íi]|ense[ñn][óo])))?)?|"
+        r"lo\s+(?:dicho|anterior)|"
+        r"cualquier\s+instrucci[óo]n)"
+        r"(?:\s+(?:anterior(?:es)?|previa?s?|de\s+(?:los?\s+)?seguridad))?",
+        0.9
+    ),
+    # Patrón 3: "actúa/accede como si no [tengas] [restricciones]"
+    (
+        r"(?:accede|act[úu]a|comportate|comporto|portate)\s+"
+        r"(?:como|con)\s+(?:si\s+)?(?:no\s+)?(?:tengas?|hubieras?|existieran?)\s+"
+        r"(?:ning[úu]n?|ning)\s+(?:tipo\s+de\s+)?(?:restricci[óo]n|l[íi]mite|control|filtro|seguridad)",
+        1.0
+    ),
 
     # ── Ejecución de comandos (peso alto: 0.8–1.0) ──
     (r"ejecuta\s+(?:este|el|un?)\s+(?:comando|script|shell|c[óo]digo)\s+(?:de\s+)?(?:shell|sistema|root|administrador|con\s+privilegios)", 0.9),
@@ -423,6 +522,19 @@ class AgentFixer:
         # Capa 1.5: Aplicar umbrales
         result = self._apply_thresholds(output, score, matches)
 
+        # Heurística: ¿el texto está fuera de scripts conocidos?
+        # Si score=0.0 y el texto usa scripts no cubiertos (árabe, CJK, etc.),
+        # las Capas 1-2 no pueden opinar → no asumir PASS seguro.
+        outside_script, script_ratio, dominant_script = is_outside_known_scripts(text_spaces)
+        blind_to_language = (
+            result.status == FixerStatus.PASS
+            and outside_script
+            and len(text_spaces.strip()) > 20  # Texto no trivial
+        )
+        if blind_to_language:
+            result.details["blind_to_language"] = dominant_script
+            result.details["script_ratio"] = script_ratio
+
         # Capa 2: Embeddings (solo si mode=medium/full Y score en zona gris)
         if (
             self.mode in ("medium", "full")
@@ -431,13 +543,12 @@ class AgentFixer:
         ):
             self._embedding_check(text_spaces, result)
 
-        # Capa 2.5: Scope drift detection (solo si hay scope y mode != fast)
-        # Solo aplica si el output ya tiene score > 0 (no es PASS limpio)
-        # Esto evita falsos positivos en código legítimo con TF-IDF limitado
+        # Capa 2.5: Scope drift detection
+        # Se ejecuta si: hay scope, mode != fast, y (score > 0 O blind_to_language)
         if (
             self.scope
             and self.mode != "fast"
-            and result.status != FixerStatus.PASS
+            and (result.status != FixerStatus.PASS or blind_to_language)
         ):
             drift_penalty = self._scope_drift_check(text_spaces)
             if drift_penalty > 0:
@@ -448,11 +559,13 @@ class AgentFixer:
                     result.reason += " + scope drift detected"
                     result.cleaned_output = ""
 
-        # Capa 3: LLM judge (solo mode=full y si aún está en zona gris)
+        # Capa 3: LLM judge
+        # Se ejecuta si: mode=full, status=CLEAN, judge habilitado
+        # O: blind_to_language (independientemente del status)
         if (
-            self.mode == "full"
-            and result.status == FixerStatus.CLEAN
-            and self._llm_judge_enabled
+            self._llm_judge_enabled
+            and self.mode in ("medium", "full")
+            and (result.status == FixerStatus.CLEAN or blind_to_language)
         ):
             judge_result = self._run_llm_judge(self.scope, output)
             if judge_result and not judge_result.consistent:
@@ -460,6 +573,27 @@ class AgentFixer:
                 result.reason += f" | LLM Judge: {judge_result.reason}"
                 result.details["llm_judge_confidence"] = judge_result.confidence
                 result.cleaned_output = ""
+            elif judge_result and judge_result.consistent and blind_to_language:
+                # El juez confirmó consistencia → degradar a CLEAN con nota
+                result.status = FixerStatus.CLEAN
+                result.reason = (
+                    f"Unverified script ({dominant_script}), "
+                    f"LLM judge confirmed consistency"
+                )
+                result.cleaned_output = output
+
+        # Si es blind_to_language y no hay Capa 3 disponible → marcar incertidumbre
+        if (
+            blind_to_language
+            and result.status == FixerStatus.PASS
+            and (not self._llm_judge_enabled or self.mode == "fast")
+        ):
+            result.status = FixerStatus.CLEAN
+            result.reason = (
+                f"Unrecognized script ({dominant_script}), "
+                f"no semantic layer available to verify"
+            )
+            result.cleaned_output = output
 
         return result
 
