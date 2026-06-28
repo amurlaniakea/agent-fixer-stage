@@ -81,11 +81,18 @@ class FixerResult:
 # Capa 0 — Normalización anti-evasión
 # ────────────────────────────────────────────────────────────────────────────
 
-# Mapa de leetspeak → ASCII (mapping principal)
-_LEET_MAP = str.maketrans({
+# Mapa de leetspeak → ASCII para DETECCIÓN (agresivo, sobre todo el texto)
+_LEET_MAP_DETECT = str.maketrans({
     '@': 'a', '4': 'a', '3': 'e', '1': 'i', '0': 'o',
     '5': 's', '7': 't', '$': 's', '+': 't', '9': 'g',
     '(': 'c', '!': 'i', '|': 'l', '&': 'and',
+})
+
+# Mapa de leetspeak → ASCII para LIMPIEZA (no corrompe sintaxis de código)
+# Excluye caracteres que son sintaxis válido en Python/shell: ( ! | + $ etc.
+_LEET_MAP_CLEAN = str.maketrans({
+    '@': 'a', '4': 'a', '3': 'e', '0': 'o',
+    '5': 's', '7': 't', '9': 'g',
 })
 
 # Caracteres ambiguos que pueden ser múltiples letras
@@ -121,12 +128,16 @@ _ZERO_WIDTH_RE = re.compile(
 def normalize_text(text: str) -> str:
     """
     Normaliza texto para detección robusta de inyecciones.
+    Usa el mapa de detección (agresivo), que normaliza todos los
+    símbolos leetspeak incluyendo aquellos que son sintaxis de código.
+    Este mapa es seguro porque el resultado se usa SOLO para scoring,
+    nunca como output entregado al usuario.
 
     Pasos:
     1. Unicode NFKC normalization
     2. Eliminar zero-width chars
     3. Homoglyph → ASCII
-    4. Leetspeak → ASCII
+    4. Leetspeak → ASCII (mapa agresivo)
     5. Colapsar whitespace
     """
     # 1. NFKC normalization
@@ -135,8 +146,8 @@ def normalize_text(text: str) -> str:
     text = _ZERO_WIDTH_RE.sub('', text)
     # 3. Homoglyphs
     text = text.translate(_HOMOGLYPH_MAP)
-    # 4. Leetspeak
-    text = text.translate(_LEET_MAP)
+    # 4. Leetspeak (detección — agresivo, normaliza ( ! | etc.)
+    text = text.translate(_LEET_MAP_DETECT)
     # 5. Colapsar whitespace (preservando newlines)
     lines = text.split('\n')
     lines = [' '.join(line.split()) for line in lines]
@@ -184,21 +195,19 @@ PATTERNS_WITH_WEIGHTS = [
     (r"post\s+(?:the|all|every)?\s*(?:data|content|result)\s+to", 0.8),
     (r"curl\s+(?:http|https)://", 0.7),
     (r"wget\s+(?:http|https)://", 0.7),
-    (r"requests\.(?:post|put|get)\s*\(", 0.7),
+    (r"requests\.(?:post|put|get)\s*[c(]", 0.7),
 
     # ── Ejecución de comandos (peso alto: 0.8–1.0) ──
     (r"run\s+['\"]?(?:curl|wget|bash|sh|cmd|powershell|python)\s", 0.8),
     (r"execute\s+(?:arbitrary|system|shell|os|remote)", 0.9),
-    (r"eval(?:uate)?\s+(?:the\s+)?(?:result|input|data|code)", 0.7),
+    (r"eval(?:uate)?\s*[c(]", 0.7),
     (r"(?:pipe|redirect)\s+(?:to|into)\s+(?:bash|sh|cmd|shell)", 0.9),
     (r"system\s+command", 0.8),
     (r"shell\s+command", 0.8),
-    (r"os\.(?:system|popen|exec)\s*\(", 0.9),
-    (r"subprocess\.", 0.7),
-    (r"import\s+os\s*;\s*os\.", 0.8),
-    (r"import\s+subprocess", 0.7),
-    (r"__import__\s*\(\s*['\"]os['\"]", 0.9),
-    (r"exec\s*\(\s*['\"]", 0.6),
+    (r"os\.(?:system|popen|exec|spawn)\s*[c(]", 1.0),
+    (r"subprocess\.(?:call|run|Popen|check_output|check_call)\s*[c(]", 0.5),
+    (r"__import__\s*[c(]\s*['\"]os['\"]", 0.9),
+    (r"exec\s*[c(]\s*['\"]", 0.6),
 
     # ── Ofuscamiento / manipulación (peso alto: 0.9–1.0) ──
     (r"ignore\s+(?:all\s+)?(?:previous|prior|safety|security)\s+(?:instruction|rule|guideline|policy)", 1.0),
@@ -221,11 +230,11 @@ PATTERNS_WITH_WEIGHTS = [
     (r"<!--\s*IMPORTANT\s*:", 0.7),
     (r"curl\s+.*\|.*(?:bash|sh)", 0.9),
     (r"wget\s+.*\|.*(?:bash|sh)", 0.9),
-    (r"eval\s*\(\s*(?:request|fetch|axios|http)", 0.8),
+    (r"eval\s*[c(]\s*(?:request|fetch|axios|http)", 0.8),
     (r"document\.cookie", 0.7),
     (r"window\.location\s*=", 0.6),
-    (r"XMLHttpRequest\s*\(\)", 0.6),
-    (r"fetch\s*\(\s*['\"]http", 0.5),
+    (r"XMLHttpRequest\s*[c(]\)", 0.6),
+    (r"fetch\s*[c(]\s*['\"]http", 0.5),
 ]
 
 
@@ -234,9 +243,9 @@ PATTERNS_WITH_WEIGHTS = [
 # ────────────────────────────────────────────────────────────────────────────
 
 SENSITIVITY_THRESHOLDS = {
-    "low":    {"flag": 0.8, "reject": 1.5},   # Solo ataques obvios
-    "medium": {"flag": 0.4, "reject": 1.0},   # Balance
-    "high":   {"flag": 0.2, "reject": 0.6},   # Paranoico
+    "low":    {"flag": 0.9, "reject": 1.8},   # Solo ataques obvios
+    "medium": {"flag": 0.7, "reject": 1.0},   # Balance
+    "high":   {"flag": 0.4, "reject": 0.7},   # Paranoico
 }
 
 
@@ -354,6 +363,10 @@ class AgentFixer:
         Pass 1: texto normalizado
         Pass 2: variantes leetspeak (para textos cortos)
         Pass 3: texto colapsado (cross-line evasion)
+
+        Retorna (score, matches) donde matches es lista de
+        (pattern_str, matched_text, weight, start_offset, end_offset).
+        Los offsets se registran sobre el texto de entrada (normalizado).
         """
         # ReDoS mitigation: limitar input a 10KB
         MAX_INPUT_LEN = 10_000
@@ -369,10 +382,20 @@ class AgentFixer:
                 match = pattern.search(target_text)
                 if match:
                     effective_weight = weight * weight_multiplier
-                    total_score += effective_weight
-                    matches.append((pattern.pattern, match.group(), effective_weight))
+                    match_key = (pattern.pattern, match.group())
+                    if match_key not in seen_matches:
+                        seen_matches.add(match_key)
+                        total_score += effective_weight
+                        matches.append((
+                            pattern.pattern,
+                            match.group(),
+                            effective_weight,
+                            match.start(),
+                            match.end(),
+                        ))
 
         # Pass 1: texto normalizado
+        seen_matches: set = set()
         scan(text)
 
         # Pass 2: variantes leetspeak (solo para textos cortos)
@@ -395,9 +418,39 @@ class AgentFixer:
     ) -> FixerResult:
         """
         Aplica umbrales de sensitivity para determinar acción.
+
+        El parámetro self.action puede overridear el resultado:
+        - action='reject' → fuerza REJECT si score > flag_threshold
+        - action='clean' → comportamiento estándar (default)
+        - action='pass' → solo rechaza si score >= reject_threshold * 1.5
         """
         flag_threshold = self._thresholds["flag"]
         reject_threshold = self._thresholds["reject"]
+
+        # Action override: 'reject' fuerza rechazo con cualquier score > flag
+        if self.action == "reject" and score >= flag_threshold:
+            return FixerResult(
+                status=FixerStatus.REJECT,
+                original_output=original,
+                cleaned_output="",
+                reason=f"[action=reject] Forced reject (score={score:.2f})",
+                layer="pattern",
+                score=score,
+                pattern_matched=matches[0][1] if matches else "",
+                details={
+                    "matches": len(matches),
+                    "action_override": "reject",
+                    "top_matches": [
+                        {"pattern": m[0][:50], "matched": m[1][:80], "weight": m[2]}
+                        for m in matches[:5]
+                    ],
+                },
+            )
+
+        # Action override: 'pass' solo rechaza si score es muy alto
+        effective_reject = reject_threshold
+        if self.action == "pass":
+            effective_reject = reject_threshold * 1.5
 
         if score < flag_threshold:
             # Score bajo → limpio
@@ -412,7 +465,7 @@ class AgentFixer:
             )
 
         # Score alto → rechazar
-        if score >= reject_threshold:
+        if score >= effective_reject:
             return FixerResult(
                 status=FixerStatus.REJECT,
                 original_output=original,
@@ -430,7 +483,7 @@ class AgentFixer:
                 },
             )
 
-        # Score medio → limpiar (span-level)
+        # Score medio → limpiar (span-level con offsets)
         cleaned = self._clean_spans(original, matches)
         return FixerResult(
             status=FixerStatus.CLEAN,
@@ -450,11 +503,33 @@ class AgentFixer:
         """
         Limpia solo los spans detectados, no la línea entera.
         Preserva el código legítimo que esté en la misma línea.
+
+        Usa offsets registrados durante el escaneo para identificar
+        exactamente qué porción del texto original reemplazar, evitando
+        el fallo donde matched_text (normalizado) no existe en original.
         """
+        if not matches:
+            return original
+
+        # Extraer offsets (start, end) de los matches y ordenar por posición
+        # Trabajamos sobre el texto original aplicando los offsets del escaneo
+        spans_to_clean = []
+        for _, matched_text, weight, start, end in matches:
+            # Clamp offsets a los límites del original
+            start = max(0, min(start, len(original)))
+            end = max(start, min(end, len(original)))
+            if start < end:
+                spans_to_clean.append((start, end, matched_text))
+
+        if not spans_to_clean:
+            return original
+
+        # Ordenar por start position (inverso para reemplazar de atrás hacia adelante)
+        spans_to_clean.sort(key=lambda x: x[0], reverse=True)
+
         cleaned = original
-        for _, matched_text, _ in matches:
-            pattern = re.compile(re.escape(matched_text), re.IGNORECASE)
-            cleaned = pattern.sub("[FIXER: redacted]", cleaned)
+        for start, end, _ in spans_to_clean:
+            cleaned = cleaned[:start] + "[FIXER: redacted]" + cleaned[end:]
         return cleaned
 
     def check_batch(self, outputs: list) -> list:
