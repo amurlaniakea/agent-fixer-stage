@@ -573,12 +573,30 @@ class AgentFixer:
                 result.reason += f" | LLM Judge: {judge_result.reason}"
                 result.details["llm_judge_confidence"] = judge_result.confidence
                 result.cleaned_output = ""
-            elif judge_result and judge_result.consistent and blind_to_language:
+            elif (
+                judge_result
+                and judge_result.consistent
+                and judge_result.is_available  # Verificar que el juez realmente evaluó, no fail-open
+                and blind_to_language
+            ):
                 # El juez confirmó consistencia → degradar a CLEAN con nota
                 result.status = FixerStatus.CLEAN
                 result.reason = (
                     f"Unverified script ({dominant_script}), "
                     f"LLM judge confirmed consistency"
+                )
+                result.cleaned_output = output
+            elif (
+                judge_result
+                and judge_result.consistent
+                and not judge_result.is_available  # Fail-open del juez
+                and blind_to_language
+            ):
+                # El juez no pudo evaluar (fail-open) → mantener incertidumbre
+                result.status = FixerStatus.CLEAN
+                result.reason = (
+                    f"Unverified script ({dominant_script}), "
+                    f"LLM judge unavailable (fail-open)"
                 )
                 result.cleaned_output = output
 

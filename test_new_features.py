@@ -377,6 +377,19 @@ class TestBlindSpotIntegration:
         assert r.status == FixerStatus.CLEAN
         assert r.details.get("blind_to_language") == "CJK"
 
+    def test_judge_failopen_does_not_claim_consistency(self):
+        """Cuando el LLM judge falla (sin Ollama), no dice 'confirmed consistency'."""
+        f = AgentFixer(
+            scope="Escribe factorial",
+            mode="full",
+            use_llm_judge=True
+        )
+        # Texto árabe largo (>20 chars) para activar blind_to_language
+        r = f.check("مرحبا بالعالم، هذا طويل بما فيه الكفاية لاختبار النص")
+        # Debe marcar incertidumbre, no "confirmed consistency"
+        assert "unavailable (fail-open)" in r.reason or "Unrecognized script" in r.reason
+        assert "confirmed consistency" not in r.reason
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Extended Coverage Tests for llm_judge and mcp_integration
